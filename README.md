@@ -39,9 +39,9 @@ Before first use, fill in via the 1Password app:
 ## Quick start
 
 ```sh
-scripts/deploy-pod.sh          # create the GPU pod, wait for it to boot
-scripts/claude-runpod.sh       # run Claude Code against it
-scripts/destroy-pod.sh         # tear the pod down when done (billed hourly)
+make deploy    # create the GPU pod, wait for it to boot
+make run       # run Claude Code against it
+make destroy   # tear the pod down when done (billed hourly)
 ```
 
 See `CLAUDE.md` for architecture details and things that are easy to get
