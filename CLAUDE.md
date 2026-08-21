@@ -49,6 +49,12 @@ locally as `.env` at the repo root — 1Password keeps that file in sync, so
 1Password app instead. `.env.example` documents the variable names for
 anyone not using 1Password.
 
+`HF_TOKEN` is a Hugging Face access token, only required when `MODEL_ID` is
+switched to a *gated* model (one requiring license acceptance on its
+Hugging Face page, e.g. Llama) — vLLM needs it to authenticate the weight
+download. The default `MODEL_ID` is public, so it's a placeholder until you
+change models.
+
 Two files are gitignored and never committed:
 - `.env` — the 1Password-managed secrets (`RUNPOD_API_KEY`, `HF_TOKEN`,
   `VLLM_API_KEY`, `MODEL_ID`, `GPU_TYPE_ID`, `POD_NAME`, `TOOL_CALL_PARSER`)
@@ -93,3 +99,7 @@ rather than assuming one.
   running `claude`. If it times out, the model is probably still loading —
   check with `runpodctl <get pod|pod get> $POD_ID` or the RunPod console
   rather than assuming the deploy failed.
+- Switching to a gated model requires both setting `HF_TOKEN` *and*
+  accepting that model's license on its Hugging Face page in a browser
+  first — a valid token alone still gets a 403 on download if the license
+  hasn't been accepted.
