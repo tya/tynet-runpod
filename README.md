@@ -26,7 +26,12 @@ you're not using 1Password.
 
 Before first use, fill in via the 1Password app:
 - `RUNPOD_API_KEY` — from the RunPod console (Settings → API Keys)
-- `HF_TOKEN` — only needed if you switch `MODEL_ID` to a gated model
+- `HF_TOKEN` — a Hugging Face access token
+  ([huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)).
+  Only needed if you switch `MODEL_ID` to a *gated* model (one requiring you
+  to accept a license on its Hugging Face page before downloading, e.g.
+  Llama) — vLLM needs the token to authenticate the download. The default
+  `MODEL_ID` is public, so this can stay as the placeholder for now.
 
 `VLLM_API_KEY` is already set to a generated random token; `MODEL_ID`,
 `GPU_TYPE_ID`, `POD_NAME`, and `TOOL_CALL_PARSER` have sensible defaults.
