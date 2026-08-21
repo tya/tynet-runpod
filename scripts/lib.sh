@@ -8,7 +8,10 @@ repo_root() {
 load_env() {
   local root
   root="$(repo_root)"
-  if [ ! -f "$root/.env" ]; then
+  # 1Password mounts .env as a named pipe, not a regular file, so this must
+  # be `-e` (exists) rather than `-f` (regular file only) or the check
+  # always fails against a live 1Password mount.
+  if [ ! -e "$root/.env" ]; then
     echo "Missing $root/.env — mount the tynet-runpod 1Password Environment" \
          "locally (see README.md), or copy .env.example to .env and fill" \
          "in values." >&2
