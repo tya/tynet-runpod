@@ -22,19 +22,36 @@ const (
 	healthInterval = 5 * time.Second
 )
 
+// execFunc replaces the running process image, as syscall.Exec does.
+// Overridden in tests so cmdRun doesn't actually exec anything.
+var execFunc = syscall.Exec
+
+// healthChecker wraps waitHealthy with the production timeout/interval.
+// Overridden in tests so command-level tests don't need a real health
+// endpoint to poll for minutes.
+var healthChecker = func(baseURL string) error {
+	return waitHealthy(baseURL, healthTimeout, healthInterval)
+}
+
 func main() {
-	if len(os.Args) < 2 {
+	os.Exit(run(os.Args))
+}
+
+// run dispatches on args[1] and returns the process exit code. Split out
+// from main so the dispatch logic is testable without an os.Exit in the way.
+func run(args []string) int {
+	if len(args) < 2 {
 		usage()
-		os.Exit(2)
+		return 2
 	}
 
 	ctx := context.Background()
 	var err error
-	switch os.Args[1] {
+	switch args[1] {
 	case "deploy":
 		err = cmdDeploy(ctx)
 	case "run":
-		err = cmdRun(ctx)
+		err = cmdRun(ctx, args[2:])
 	case "destroy":
 		err = cmdDestroy(ctx)
 	case "gpus":
@@ -43,12 +60,13 @@ func main() {
 		err = cmdResize(ctx)
 	default:
 		usage()
-		os.Exit(2)
+		return 2
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 func usage() {
@@ -69,7 +87,7 @@ func vllmArgs(secrets map[string]string) string {
 }
 
 func cmdDeploy(ctx context.Context) error {
-	secrets, err := loadSecrets(ctx)
+	secrets, err := secretsLoader(ctx)
 	if err != nil {
 		return err
 	}
@@ -90,7 +108,7 @@ func cmdDeploy(ctx context.Context) error {
 		podName = "tynet-runpod-vllm"
 	}
 
-	client := newRunpodClient(secrets["RUNPOD_API_KEY"])
+	client := runpodClientFactory(secrets["RUNPOD_API_KEY"])
 
 	fmt.Println("Ensuring persistent Hugging Face cache volume...")
 	vol, err := client.ensureNetworkVolume(ctx, hfCacheVolume, hfCacheSize, secrets["GPU_TYPE_ID"])
@@ -133,14 +151,14 @@ func cmdDeploy(ctx context.Context) error {
 
 	fmt.Printf("Pod %s created. Base URL: %s\n", p.ID, baseURL)
 	fmt.Println("Waiting for the model server to become healthy (this can take several minutes while weights download/load)...")
-	if err := waitHealthy(baseURL); err != nil {
+	if err := healthChecker(baseURL); err != nil {
 		return err
 	}
 	fmt.Println("Pod is healthy. Run `make run` to start Claude Code against it.")
 	return nil
 }
 
-func cmdRun(ctx context.Context) error {
+func cmdRun(ctx context.Context, extraArgs []string) error {
 	state, err := loadState()
 	if err != nil {
 		return err
@@ -148,13 +166,13 @@ func cmdRun(ctx context.Context) error {
 	if state.PodID == "" {
 		return fmt.Errorf("no pod found — run `make deploy` first")
 	}
-	secrets, err := loadSecrets(ctx)
+	secrets, err := secretsLoader(ctx)
 	if err != nil {
 		return err
 	}
 
 	fmt.Println("Waiting for the model server to be healthy...")
-	if err := waitHealthy(state.BaseURL); err != nil {
+	if err := healthChecker(state.BaseURL); err != nil {
 		return err
 	}
 
@@ -181,8 +199,8 @@ func cmdRun(ctx context.Context) error {
 		"DISABLE_ERROR_REPORTING=1",
 	)
 
-	argv := append([]string{"claude"}, os.Args[2:]...)
-	return syscall.Exec(claudePath, argv, env)
+	argv := append([]string{"claude"}, extraArgs...)
+	return execFunc(claudePath, argv, env)
 }
 
 func cmdDestroy(ctx context.Context) error {
@@ -194,7 +212,7 @@ func cmdDestroy(ctx context.Context) error {
 		fmt.Println("No pod recorded in .runpod-state.json — nothing to do.")
 		return nil
 	}
-	secrets, err := loadSecrets(ctx)
+	secrets, err := secretsLoader(ctx)
 	if err != nil {
 		return err
 	}
@@ -202,7 +220,7 @@ func cmdDestroy(ctx context.Context) error {
 		return fmt.Errorf("RUNPOD_API_KEY is empty in the tynet-runpod Environment")
 	}
 
-	client := newRunpodClient(secrets["RUNPOD_API_KEY"])
+	client := runpodClientFactory(secrets["RUNPOD_API_KEY"])
 	fmt.Printf("Terminating pod %s...\n", state.PodID)
 	if err := client.deletePod(ctx, state.PodID); err != nil {
 		return err
@@ -221,11 +239,11 @@ func cmdDestroy(ctx context.Context) error {
 // the GPUs currently in stock there. GPU_TYPE_ID must be one of these or
 // deploy's volume placement has nowhere valid to put the pod.
 func cmdGPUs(ctx context.Context) error {
-	secrets, err := loadSecrets(ctx)
+	secrets, err := secretsLoader(ctx)
 	if err != nil {
 		return err
 	}
-	client := newRunpodClient(secrets["RUNPOD_API_KEY"])
+	client := runpodClientFactory(secrets["RUNPOD_API_KEY"])
 	dcs, err := client.listNetworkVolumeCapableGPUs(ctx)
 	if err != nil {
 		return err
@@ -252,11 +270,11 @@ func cmdResize(ctx context.Context) error {
 	if state.PodID == "" {
 		return fmt.Errorf("no pod found — run `make deploy` first")
 	}
-	secrets, err := loadSecrets(ctx)
+	secrets, err := secretsLoader(ctx)
 	if err != nil {
 		return err
 	}
-	client := newRunpodClient(secrets["RUNPOD_API_KEY"])
+	client := runpodClientFactory(secrets["RUNPOD_API_KEY"])
 	if err := client.patchPodArgs(ctx, state.PodID, vllmArgs(secrets)); err != nil {
 		return fmt.Errorf("patching pod args: %w", err)
 	}
@@ -265,7 +283,7 @@ func cmdResize(ctx context.Context) error {
 		return fmt.Errorf("restarting pod: %w", err)
 	}
 	fmt.Println("Waiting for the model server to become healthy...")
-	return waitHealthy(state.BaseURL)
+	return healthChecker(state.BaseURL)
 }
 
 func findClaude() (string, error) {
@@ -276,8 +294,8 @@ func findClaude() (string, error) {
 	return path, nil
 }
 
-func waitHealthy(baseURL string) error {
-	deadline := time.Now().Add(healthTimeout)
+func waitHealthy(baseURL string, timeout, interval time.Duration) error {
+	deadline := time.Now().Add(timeout)
 	client := &http.Client{Timeout: 10 * time.Second}
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(baseURL + "/health")
@@ -287,7 +305,7 @@ func waitHealthy(baseURL string) error {
 				return nil
 			}
 		}
-		time.Sleep(healthInterval)
+		time.Sleep(interval)
 	}
-	return fmt.Errorf("timed out waiting for %s/health after %s — the model may still be loading; check the RunPod console", baseURL, healthTimeout)
+	return fmt.Errorf("timed out waiting for %s/health after %s — the model may still be loading; check the RunPod console", baseURL, timeout)
 }

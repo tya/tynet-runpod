@@ -1,4 +1,4 @@
-.PHONY: help deploy run destroy gpus resize
+.PHONY: help deploy run destroy gpus resize test cover
 
 -include .env.local
 export
@@ -6,7 +6,7 @@ export
 .DEFAULT_GOAL := help
 
 help: ## List available targets
-	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "%-10s %s\n", $$1, $$2}'
+	@grep -hE '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "%-10s %s\n", $$1, $$2}'
 
 deploy: ## Create the GPU pod, wait for it to boot
 	go run . deploy
@@ -22,3 +22,10 @@ gpus: ## List GPU stock in network-volume-capable data centers
 
 resize: ## Re-apply vllm args to a running pod and restart it
 	go run . resize
+
+test: ## Run the test suite
+	go test ./...
+
+cover: ## Run tests with a per-function coverage report
+	go test -coverprofile=/tmp/tynet-runpod-cover.out ./...
+	go tool cover -func=/tmp/tynet-runpod-cover.out

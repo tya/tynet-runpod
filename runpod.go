@@ -12,13 +12,31 @@ import (
 
 const runpodAPIBase = "https://api.runpod.io"
 
+// runpodAPI is the subset of runpodClient's methods the command layer
+// depends on, so tests can substitute a fake instead of hitting the real
+// RunPod API.
+type runpodAPI interface {
+	ensureNetworkVolume(ctx context.Context, name string, sizeGB int, gpuTypeID string) (networkVolume, error)
+	createPod(ctx context.Context, p createPodParams) (pod, error)
+	deletePod(ctx context.Context, id string) error
+	patchPodArgs(ctx context.Context, id, args string) error
+	restartPod(ctx context.Context, id string) error
+	listNetworkVolumeCapableGPUs(ctx context.Context) ([]dataCenter, error)
+}
+
 type runpodClient struct {
-	apiKey string
-	http   *http.Client
+	apiKey  string
+	baseURL string
+	http    *http.Client
 }
 
 func newRunpodClient(apiKey string) *runpodClient {
-	return &runpodClient{apiKey: apiKey, http: &http.Client{Timeout: 30 * time.Second}}
+	return &runpodClient{apiKey: apiKey, baseURL: runpodAPIBase, http: &http.Client{Timeout: 30 * time.Second}}
+}
+
+// runpodClientFactory is overridden in tests to return a fake runpodAPI.
+var runpodClientFactory = func(apiKey string) runpodAPI {
+	return newRunpodClient(apiKey)
 }
 
 func (c *runpodClient) do(ctx context.Context, method, path string, body, out interface{}) error {
@@ -31,7 +49,7 @@ func (c *runpodClient) do(ctx context.Context, method, path string, body, out in
 		reqBody = bytes.NewReader(b)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, runpodAPIBase+path, reqBody)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reqBody)
 	if err != nil {
 		return err
 	}
