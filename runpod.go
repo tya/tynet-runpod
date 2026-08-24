@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -18,20 +21,30 @@ const runpodAPIBase = "https://api.runpod.io"
 type runpodAPI interface {
 	ensureNetworkVolume(ctx context.Context, name string, sizeGB int, gpuTypeID string) (networkVolume, error)
 	createPod(ctx context.Context, p createPodParams) (pod, error)
+	getPod(ctx context.Context, id string) (podDetail, error)
 	deletePod(ctx context.Context, id string) error
 	patchPodArgs(ctx context.Context, id, args string) error
 	restartPod(ctx context.Context, id string) error
 	listNetworkVolumeCapableGPUs(ctx context.Context) ([]dataCenter, error)
+	streamLogs(ctx context.Context, id string, tail int, source string, w io.Writer) error
 }
 
 type runpodClient struct {
 	apiKey  string
 	baseURL string
 	http    *http.Client
+	// stream is used for the logs SSE connection, which has to stay open
+	// far longer than http's 30s request timeout allows.
+	stream *http.Client
 }
 
 func newRunpodClient(apiKey string) *runpodClient {
-	return &runpodClient{apiKey: apiKey, baseURL: runpodAPIBase, http: &http.Client{Timeout: 30 * time.Second}}
+	return &runpodClient{
+		apiKey:  apiKey,
+		baseURL: runpodAPIBase,
+		http:    &http.Client{Timeout: 30 * time.Second},
+		stream:  &http.Client{},
+	}
 }
 
 // runpodClientFactory is overridden in tests to return a fake runpodAPI.
@@ -207,6 +220,37 @@ func (c *runpodClient) createPod(ctx context.Context, p createPodParams) (pod, e
 	return created, nil
 }
 
+// podDetail is the subset of GET /v2/pods/{id}'s response used by cmdStatus.
+type podGPUUtil struct {
+	Util       float64 `json:"util"`
+	MemoryUtil float64 `json:"memoryUtil"`
+}
+
+type podDetail struct {
+	ID      string  `json:"id"`
+	Name    string  `json:"name"`
+	Status  string  `json:"status"`
+	Cost    float64 `json:"cost"`
+	Runtime struct {
+		Uptime int `json:"uptime"`
+		CPU    struct {
+			Util float64 `json:"util"`
+		} `json:"cpu"`
+		Memory struct {
+			Util float64 `json:"util"`
+		} `json:"memory"`
+		GPUs []podGPUUtil `json:"gpus"`
+	} `json:"runtime"`
+}
+
+func (c *runpodClient) getPod(ctx context.Context, id string) (podDetail, error) {
+	var p podDetail
+	if err := c.do(ctx, http.MethodGet, "/v2/pods/"+id, nil, &p); err != nil {
+		return podDetail{}, err
+	}
+	return p, nil
+}
+
 func (c *runpodClient) deletePod(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodDelete, "/v2/pods/"+id, nil, nil)
 }
@@ -237,4 +281,54 @@ func (c *runpodClient) listNetworkVolumeCapableGPUs(ctx context.Context) ([]data
 
 func podProxyURL(podID string, port int) string {
 	return fmt.Sprintf("https://%s-%d.proxy.runpod.net", podID, port)
+}
+
+type logEvent struct {
+	TS     string `json:"ts"`
+	Source string `json:"source"`
+	Line   string `json:"line"`
+}
+
+// streamLogs streams a pod's container/system logs as Server-Sent Events,
+// writing formatted lines to w until ctx is canceled or the connection
+// closes. tail sets how many historical lines to backfill (0-5000); source
+// filters to "container" or "system", or both when empty.
+func (c *runpodClient) streamLogs(ctx context.Context, id string, tail int, source string, w io.Writer) error {
+	path := fmt.Sprintf("/v2/pods/%s/logs?tail=%d", id, tail)
+	if source != "" {
+		path += "&source=" + url.QueryEscape(source)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Accept", "text/event-stream")
+
+	resp, err := c.stream.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("GET %s: %s: %s", path, resp.Status, string(body))
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		data, ok := strings.CutPrefix(scanner.Text(), "data: ")
+		if !ok {
+			continue
+		}
+		var ev logEvent
+		if err := json.Unmarshal([]byte(data), &ev); err != nil {
+			continue
+		}
+		fmt.Fprintf(w, "%s [%s] %s\n", ev.TS, ev.Source, ev.Line)
+	}
+	return scanner.Err()
 }

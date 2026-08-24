@@ -23,14 +23,26 @@ make run      # go run . run     — exec `claude` against it
 make destroy  # go run . destroy — terminate the pod (keeps the cache volume)
 make gpus     # go run . gpus    — list GPUs with stock in network-volume-capable DCs
 make resize   # go run . resize  — re-apply vllmArgs to a running pod and restart it
+make status   # go run . status  — print pod status and live CPU/GPU/memory utilization
+make logs     # go run . logs    — stream container/system logs (Ctrl-C to stop)
+
+make test-integration  # deploy a REAL pod, send it a chat request, destroy it
 ```
 
 `main_test.go`/`runpod_test.go`/`secrets_test.go`/`state_test.go` cover
-95.8% of statements via fakes/seams (`runpodClientFactory`, `secretsLoader`,
+95.8%+ of statements via fakes/seams (`runpodClientFactory`, `secretsLoader`,
 `healthChecker`, `execFunc`) — no live RunPod pod or 1Password session
 needed to run them. `.github/workflows/ci.yml` runs build/vet/gofmt/test on
 every push to main and every PR, and is a required status check before
 merging.
+
+`make test-integration` runs `integration_test.go` (build tag `integration`,
+so it's excluded from `go test ./...` and CI) — it exercises `cmdDeploy` /
+`cmdDestroy` for real against the live RunPod API and a live pod, unlike the
+unit tests which fake everything. It self-skips if secrets aren't reachable
+(no 1Password session, missing values), but when it does run it costs real
+GPU-hour billing and writes/overwrites `.runpod-state.json` in the repo
+root exactly like a manual `make deploy` would.
 
 ## Architecture
 
@@ -126,6 +138,13 @@ from RunPod's docs:
   if you later switch to a `GPU_TYPE_ID` with no stock in that specific DC.
   Deleting the volume (or renaming `hfCacheVolume` in `main.go`) forces a
   fresh placement.
+- **`GET /v2/pods/{id}/logs` is Server-Sent Events, not a plain JSON
+  response.** `streamLogs` reads it as a stream of `data: {...}` lines
+  (`{ts, source, line}` per event) rather than a single decoded body — this
+  is why it doesn't go through the shared `do()` helper the other methods
+  use. It uses a separate `*http.Client` (`c.stream`, no timeout) instead of
+  `c.http` (30s timeout), since a log stream is meant to stay open
+  indefinitely; `cmdLogs` cancels it via `signal.NotifyContext` on Ctrl-C.
 
 ## State
 

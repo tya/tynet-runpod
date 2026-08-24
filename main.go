@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"syscall"
 	"time"
 )
@@ -33,6 +35,11 @@ var healthChecker = func(baseURL string) error {
 	return waitHealthy(baseURL, healthTimeout, healthInterval)
 }
 
+// notifyContext is overridden in tests to hand cmdLogs an already-canceled
+// context, so the Ctrl-C shutdown path is testable without sending a real
+// SIGINT to the test process.
+var notifyContext = signal.NotifyContext
+
 func main() {
 	os.Exit(run(os.Args))
 }
@@ -58,6 +65,10 @@ func run(args []string) int {
 		err = cmdGPUs(ctx)
 	case "resize":
 		err = cmdResize(ctx)
+	case "status":
+		err = cmdStatus(ctx)
+	case "logs":
+		err = cmdLogs(ctx, args[2:])
 	default:
 		usage()
 		return 2
@@ -70,7 +81,7 @@ func run(args []string) int {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: tynet-runpod <deploy|run|destroy|gpus|resize>")
+	fmt.Fprintln(os.Stderr, "usage: tynet-runpod <deploy|run|destroy|gpus|resize|status|logs>")
 }
 
 // vllmArgs builds the `vllm serve` argument string from the Environment's
@@ -284,6 +295,70 @@ func cmdResize(ctx context.Context) error {
 	}
 	fmt.Println("Waiting for the model server to become healthy...")
 	return healthChecker(state.BaseURL)
+}
+
+// cmdStatus prints the pod's current status and live resource utilization.
+func cmdStatus(ctx context.Context) error {
+	state, err := loadState()
+	if err != nil {
+		return err
+	}
+	if state.PodID == "" {
+		return fmt.Errorf("no pod found — run `make deploy` first")
+	}
+	secrets, err := secretsLoader(ctx)
+	if err != nil {
+		return err
+	}
+	client := runpodClientFactory(secrets["RUNPOD_API_KEY"])
+	p, err := client.getPod(ctx, state.PodID)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Pod:      %s (%s)\n", p.ID, p.Name)
+	fmt.Printf("Status:   %s\n", p.Status)
+	fmt.Printf("Uptime:   %s\n", (time.Duration(p.Runtime.Uptime) * time.Second).Round(time.Second))
+	fmt.Printf("Cost:     $%.2f/hr\n", p.Cost)
+	fmt.Printf("CPU:      %.0f%%\n", p.Runtime.CPU.Util)
+	fmt.Printf("Memory:   %.0f%%\n", p.Runtime.Memory.Util)
+	for i, g := range p.Runtime.GPUs {
+		fmt.Printf("GPU[%d]:   util=%.0f%% mem=%.0f%%\n", i, g.Util, g.MemoryUtil)
+	}
+	fmt.Printf("Base URL: %s\n", state.BaseURL)
+	return nil
+}
+
+// cmdLogs streams the pod's container/system logs until interrupted
+// (Ctrl-C) or the connection closes.
+func cmdLogs(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("logs", flag.ContinueOnError)
+	tail := fs.Int("tail", 100, "number of historical lines to backfill (0-5000)")
+	source := fs.String("source", "", "log source to stream: container, system, or empty for both")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	state, err := loadState()
+	if err != nil {
+		return err
+	}
+	if state.PodID == "" {
+		return fmt.Errorf("no pod found — run `make deploy` first")
+	}
+	secrets, err := secretsLoader(ctx)
+	if err != nil {
+		return err
+	}
+	client := runpodClientFactory(secrets["RUNPOD_API_KEY"])
+
+	ctx, stop := notifyContext(ctx, os.Interrupt)
+	defer stop()
+	err = client.streamLogs(ctx, state.PodID, *tail, *source, os.Stdout)
+	if ctx.Err() != nil {
+		return nil // stopped by Ctrl-C, not a real error
+	}
+	return err
 }
 
 func findClaude() (string, error) {

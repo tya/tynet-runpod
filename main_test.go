@@ -18,10 +18,12 @@ import (
 type fakeRunpodAPI struct {
 	ensureNetworkVolumeFn      func(ctx context.Context, name string, sizeGB int, gpuTypeID string) (networkVolume, error)
 	createPodFn                func(ctx context.Context, p createPodParams) (pod, error)
+	getPodFn                   func(ctx context.Context, id string) (podDetail, error)
 	deletePodFn                func(ctx context.Context, id string) error
 	patchPodArgsFn             func(ctx context.Context, id, args string) error
 	restartPodFn               func(ctx context.Context, id string) error
 	listNetworkVolumeCapableFn func(ctx context.Context) ([]dataCenter, error)
+	streamLogsFn               func(ctx context.Context, id string, tail int, source string, w io.Writer) error
 }
 
 func (f *fakeRunpodAPI) ensureNetworkVolume(ctx context.Context, name string, sizeGB int, gpuTypeID string) (networkVolume, error) {
@@ -29,6 +31,9 @@ func (f *fakeRunpodAPI) ensureNetworkVolume(ctx context.Context, name string, si
 }
 func (f *fakeRunpodAPI) createPod(ctx context.Context, p createPodParams) (pod, error) {
 	return f.createPodFn(ctx, p)
+}
+func (f *fakeRunpodAPI) getPod(ctx context.Context, id string) (podDetail, error) {
+	return f.getPodFn(ctx, id)
 }
 func (f *fakeRunpodAPI) deletePod(ctx context.Context, id string) error {
 	return f.deletePodFn(ctx, id)
@@ -41,6 +46,9 @@ func (f *fakeRunpodAPI) restartPod(ctx context.Context, id string) error {
 }
 func (f *fakeRunpodAPI) listNetworkVolumeCapableGPUs(ctx context.Context) ([]dataCenter, error) {
 	return f.listNetworkVolumeCapableFn(ctx)
+}
+func (f *fakeRunpodAPI) streamLogs(ctx context.Context, id string, tail int, source string, w io.Writer) error {
+	return f.streamLogsFn(ctx, id, tail, source, w)
 }
 
 // withFakeRunpodClient overrides runpodClientFactory to always return fake,
@@ -842,6 +850,213 @@ func TestCmdResize_HealthCheckError(t *testing.T) {
 	err := cmdResize(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "never healthy") {
 		t.Errorf("cmdResize() error = %v, want the health check error", err)
+	}
+}
+
+func TestCmdStatus_Success(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := saveState(podState{PodID: "pod-1", BaseURL: "https://example.invalid"}); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+	withFakeSecrets(t, validSecrets(), nil)
+	var gotID string
+	withFakeRunpodClient(t, &fakeRunpodAPI{
+		getPodFn: func(ctx context.Context, id string) (podDetail, error) {
+			gotID = id
+			d := podDetail{ID: id, Name: "n", Status: "RUNNING", Cost: 0.5}
+			d.Runtime.GPUs = []podGPUUtil{{Util: 80, MemoryUtil: 60}}
+			return d, nil
+		},
+	})
+	if err := cmdStatus(context.Background()); err != nil {
+		t.Fatalf("cmdStatus() error = %v", err)
+	}
+	if gotID != "pod-1" {
+		t.Errorf("getPod called with %q, want pod-1", gotID)
+	}
+}
+
+func TestCmdStatus_NoStateReturnsError(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := cmdStatus(context.Background()); err == nil {
+		t.Fatal("cmdStatus() error = nil, want error when no pod is deployed")
+	}
+}
+
+func TestCmdStatus_LoadStateErrorPropagates(t *testing.T) {
+	t.Chdir(t.TempDir())
+	writeMalformedState(t)
+	if err := cmdStatus(context.Background()); err == nil {
+		t.Fatal("cmdStatus() error = nil, want the loadState decode error propagated")
+	}
+}
+
+func TestCmdStatus_SecretsLoadError(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := saveState(podState{PodID: "pod-1"}); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+	withFakeSecrets(t, nil, errors.New("op down"))
+	if err := cmdStatus(context.Background()); err == nil {
+		t.Fatal("cmdStatus() error = nil, want secrets error propagated")
+	}
+}
+
+func TestCmdStatus_GetPodError(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := saveState(podState{PodID: "pod-1"}); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+	withFakeSecrets(t, validSecrets(), nil)
+	withFakeRunpodClient(t, &fakeRunpodAPI{
+		getPodFn: func(ctx context.Context, id string) (podDetail, error) { return podDetail{}, errors.New("not found") },
+	})
+	if err := cmdStatus(context.Background()); err == nil {
+		t.Fatal("cmdStatus() error = nil, want getPod error propagated")
+	}
+}
+
+func TestCmdLogs_Success(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := saveState(podState{PodID: "pod-1"}); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+	withFakeSecrets(t, validSecrets(), nil)
+	var gotID, gotSource string
+	var gotTail int
+	withFakeRunpodClient(t, &fakeRunpodAPI{
+		streamLogsFn: func(ctx context.Context, id string, tail int, source string, w io.Writer) error {
+			gotID, gotTail, gotSource = id, tail, source
+			return nil
+		},
+	})
+	if err := cmdLogs(context.Background(), []string{"-tail", "50", "-source", "container"}); err != nil {
+		t.Fatalf("cmdLogs() error = %v", err)
+	}
+	if gotID != "pod-1" || gotTail != 50 || gotSource != "container" {
+		t.Errorf("streamLogs called with id=%q tail=%d source=%q, want pod-1/50/container", gotID, gotTail, gotSource)
+	}
+}
+
+func TestCmdLogs_DefaultFlags(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := saveState(podState{PodID: "pod-1"}); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+	withFakeSecrets(t, validSecrets(), nil)
+	var gotTail int
+	var gotSource string
+	withFakeRunpodClient(t, &fakeRunpodAPI{
+		streamLogsFn: func(ctx context.Context, id string, tail int, source string, w io.Writer) error {
+			gotTail, gotSource = tail, source
+			return nil
+		},
+	})
+	if err := cmdLogs(context.Background(), nil); err != nil {
+		t.Fatalf("cmdLogs() error = %v", err)
+	}
+	if gotTail != 100 || gotSource != "" {
+		t.Errorf("default tail=%d source=%q, want 100/empty", gotTail, gotSource)
+	}
+}
+
+func TestCmdLogs_InvalidFlagReturnsError(t *testing.T) {
+	if err := cmdLogs(context.Background(), []string{"-bogus"}); err == nil {
+		t.Fatal("cmdLogs() error = nil, want a flag parse error")
+	}
+}
+
+func TestCmdLogs_NoStateReturnsError(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := cmdLogs(context.Background(), nil); err == nil {
+		t.Fatal("cmdLogs() error = nil, want error when no pod is deployed")
+	}
+}
+
+func TestCmdLogs_LoadStateErrorPropagates(t *testing.T) {
+	t.Chdir(t.TempDir())
+	writeMalformedState(t)
+	if err := cmdLogs(context.Background(), nil); err == nil {
+		t.Fatal("cmdLogs() error = nil, want the loadState decode error propagated")
+	}
+}
+
+func TestCmdLogs_CtrlCSuppressesStreamError(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := saveState(podState{PodID: "pod-1"}); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+	withFakeSecrets(t, validSecrets(), nil)
+	withFakeRunpodClient(t, &fakeRunpodAPI{
+		streamLogsFn: func(ctx context.Context, id string, tail int, source string, w io.Writer) error {
+			return errors.New("connection reset") // what a real Ctrl-C-triggered cancel looks like
+		},
+	})
+	origNotify := notifyContext
+	t.Cleanup(func() { notifyContext = origNotify })
+	notifyContext = func(parent context.Context, sig ...os.Signal) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(parent)
+		cancel() // simulate Ctrl-C having already fired
+		return ctx, cancel
+	}
+
+	if err := cmdLogs(context.Background(), nil); err != nil {
+		t.Errorf("cmdLogs() error = %v, want nil since cancellation means the user hit Ctrl-C", err)
+	}
+}
+
+func TestCmdLogs_SecretsLoadError(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := saveState(podState{PodID: "pod-1"}); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+	withFakeSecrets(t, nil, errors.New("op down"))
+	if err := cmdLogs(context.Background(), nil); err == nil {
+		t.Fatal("cmdLogs() error = nil, want secrets error propagated")
+	}
+}
+
+func TestCmdLogs_StreamErrorPropagates(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := saveState(podState{PodID: "pod-1"}); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+	withFakeSecrets(t, validSecrets(), nil)
+	withFakeRunpodClient(t, &fakeRunpodAPI{
+		streamLogsFn: func(ctx context.Context, id string, tail int, source string, w io.Writer) error {
+			return errors.New("stream broke")
+		},
+	})
+	if err := cmdLogs(context.Background(), nil); err == nil {
+		t.Fatal("cmdLogs() error = nil, want the stream error propagated")
+	}
+}
+
+func TestRun_DispatchesStatus(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := saveState(podState{PodID: "pod-1"}); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+	withFakeSecrets(t, validSecrets(), nil)
+	withFakeRunpodClient(t, &fakeRunpodAPI{
+		getPodFn: func(ctx context.Context, id string) (podDetail, error) { return podDetail{ID: id}, nil },
+	})
+	if code := run([]string{"tynet-runpod", "status"}); code != 0 {
+		t.Errorf(`run(["status"]) = %d, want 0`, code)
+	}
+}
+
+func TestRun_DispatchesLogs(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := saveState(podState{PodID: "pod-1"}); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+	withFakeSecrets(t, validSecrets(), nil)
+	withFakeRunpodClient(t, &fakeRunpodAPI{
+		streamLogsFn: func(ctx context.Context, id string, tail int, source string, w io.Writer) error { return nil },
+	})
+	if code := run([]string{"tynet-runpod", "logs"}); code != 0 {
+		t.Errorf(`run(["logs"]) = %d, want 0`, code)
 	}
 }
 
