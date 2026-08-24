@@ -40,9 +40,14 @@ merging.
 so it's excluded from `go test ./...` and CI) — it exercises `cmdDeploy` /
 `cmdDestroy` for real against the live RunPod API and a live pod, unlike the
 unit tests which fake everything. It self-skips if secrets aren't reachable
-(no 1Password session, missing values), but when it does run it costs real
-GPU-hour billing and writes/overwrites `.runpod-state.json` in the repo
-root exactly like a manual `make deploy` would.
+(no 1Password session, missing values). If `.runpod-state.json` already
+tracks a pod, the test reuses it instead of deploying a new one and leaves
+it running afterward — `cmdDeploy` has no guard against double-deploying,
+so calling it while a pod is already tracked would create an orphaned
+second pod (state gets overwritten with the new pod's ID, and the original
+keeps billing with nothing left pointing at it). A fresh deploy (and its
+teardown on cleanup) only happens when the state file is empty; that path
+costs real GPU-hour billing and takes several minutes.
 
 ## Architecture
 
