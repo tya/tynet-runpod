@@ -1,4 +1,4 @@
-.PHONY: help build deploy run destroy gpus resize test cover
+.PHONY: help build deploy run destroy gpus resize status logs test cover test-integration
 
 -include .env.local
 export
@@ -26,9 +26,18 @@ gpus: ## List GPU stock in network-volume-capable data centers
 resize: ## Re-apply vllm args to a running pod and restart it
 	go run . resize
 
+status: ## Show the pod's status and live resource utilization
+	go run . status
+
+logs: ## Stream the pod's logs (ARGS="-tail 500 -source container")
+	go run . logs $(ARGS)
+
 test: ## Run the test suite
 	go test ./...
 
 cover: ## Run tests and open an HTML coverage report in the browser
 	go test -coverprofile=/tmp/tynet-runpod-cover.out ./...
 	go tool cover -html=/tmp/tynet-runpod-cover.out
+
+test-integration: ## Deploy a REAL pod, verify it replies, then destroy it (costs GPU billing + several minutes)
+	go test -tags integration -run TestIntegration -v -timeout 20m ./...

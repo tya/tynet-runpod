@@ -420,3 +420,123 @@ func TestListNetworkVolumeCapableGPUs_Error(t *testing.T) {
 		t.Fatal("listNetworkVolumeCapableGPUs() error = nil, want error")
 	}
 }
+
+func TestGetPod_Success(t *testing.T) {
+	var gotPath string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`{
+			"id": "pod-1", "name": "n", "status": "RUNNING", "cost": 0.5,
+			"runtime": {
+				"uptime": 3661,
+				"cpu": {"util": 12.5},
+				"memory": {"util": 40},
+				"gpus": [{"util": 80, "memoryUtil": 60}]
+			}
+		}`))
+	})
+	p, err := c.getPod(context.Background(), "pod-1")
+	if err != nil {
+		t.Fatalf("getPod() error = %v", err)
+	}
+	if gotPath != "/v2/pods/pod-1" {
+		t.Errorf("getPod() requested path = %q, want /v2/pods/pod-1", gotPath)
+	}
+	if p.Status != "RUNNING" || p.Runtime.Uptime != 3661 || len(p.Runtime.GPUs) != 1 {
+		t.Errorf("getPod() = %+v, want RUNNING/3661/1 gpu", p)
+	}
+	if p.Runtime.GPUs[0].Util != 80 || p.Runtime.GPUs[0].MemoryUtil != 60 {
+		t.Errorf("getPod() GPU = %+v, want util=80 memoryUtil=60", p.Runtime.GPUs[0])
+	}
+}
+
+func TestGetPod_Error(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	_, err := c.getPod(context.Background(), "pod-1")
+	if err == nil {
+		t.Fatal("getPod() error = nil, want error on 404")
+	}
+}
+
+func TestStreamLogs_Success(t *testing.T) {
+	var gotPath string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.RequestURI()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("id: 1\ndata: {\"ts\":\"2026-01-01T00:00:00Z\",\"source\":\"container\",\"line\":\"hello\"}\n\n"))
+		_, _ = w.Write([]byte(": comment, should be ignored\n\n"))
+		_, _ = w.Write([]byte("data: {\"ts\":\"2026-01-01T00:00:01Z\",\"source\":\"system\",\"line\":\"world\"}\n\n"))
+	})
+	var buf strings.Builder
+	err := c.streamLogs(context.Background(), "pod-1", 50, "container", &buf)
+	if err != nil {
+		t.Fatalf("streamLogs() error = %v", err)
+	}
+	if !strings.Contains(gotPath, "/v2/pods/pod-1/logs") || !strings.Contains(gotPath, "tail=50") || !strings.Contains(gotPath, "source=container") {
+		t.Errorf("streamLogs() requested %q, want tail=50 and source=container", gotPath)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "hello") || !strings.Contains(got, "world") {
+		t.Errorf("streamLogs() wrote %q, want both log lines", got)
+	}
+}
+
+func TestStreamLogs_OmitsSourceWhenEmpty(t *testing.T) {
+	var gotPath string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.RequestURI()
+	})
+	var buf strings.Builder
+	if err := c.streamLogs(context.Background(), "pod-1", 0, "", &buf); err != nil {
+		t.Fatalf("streamLogs() error = %v", err)
+	}
+	if strings.Contains(gotPath, "source=") {
+		t.Errorf("streamLogs() requested %q, want no source param when unset", gotPath)
+	}
+}
+
+func TestStreamLogs_NonSuccessStatusReturnsError(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("nope"))
+	})
+	var buf strings.Builder
+	err := c.streamLogs(context.Background(), "pod-1", 100, "", &buf)
+	if err == nil || !strings.Contains(err.Error(), "403") {
+		t.Errorf("streamLogs() error = %v, want it to mention 403", err)
+	}
+}
+
+func TestStreamLogs_ConnectionErrorReturnsError(t *testing.T) {
+	c := newRunpodClient("k")
+	c.baseURL = "http://127.0.0.1:1"
+	var buf strings.Builder
+	if err := c.streamLogs(context.Background(), "pod-1", 100, "", &buf); err == nil {
+		t.Fatal("streamLogs() error = nil, want a connection error")
+	}
+}
+
+func TestStreamLogs_InvalidRequestReturnsError(t *testing.T) {
+	c := newRunpodClient("k")
+	c.baseURL = "http://unused.invalid"
+	err := c.streamLogs(context.Background(), "pod\n1", 100, "", &strings.Builder{})
+	if err == nil {
+		t.Fatal("streamLogs() error = nil, want an invalid-request error for a control character in the URL")
+	}
+}
+
+func TestStreamLogs_SkipsMalformedEvent(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("data: {not valid json\n\n"))
+		_, _ = w.Write([]byte("data: {\"ts\":\"2026-01-01T00:00:00Z\",\"source\":\"container\",\"line\":\"ok\"}\n\n"))
+	})
+	var buf strings.Builder
+	if err := c.streamLogs(context.Background(), "pod-1", 100, "", &buf); err != nil {
+		t.Fatalf("streamLogs() error = %v", err)
+	}
+	if !strings.Contains(buf.String(), "ok") {
+		t.Errorf("streamLogs() wrote %q, want the malformed event skipped and the valid one kept", buf.String())
+	}
+}

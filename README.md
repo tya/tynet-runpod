@@ -58,10 +58,20 @@ that also supports the persistent cache volume, before changing
 ```sh
 make deploy    # create the GPU pod, wait for it to boot
 make run       # run Claude Code against it
+make status    # show pod status and live CPU/GPU/memory utilization
+make logs      # stream the pod's container/system logs (Ctrl-C to stop)
 make destroy   # tear the pod down when done (billed hourly; keeps the cache volume)
 ```
 
-`make run` passes through extra args to `claude`, e.g. `make run ARGS="-p 'hello'"`.
+`make run`/`make logs` pass through extra args, e.g. `make run ARGS="-p 'hello'"` or
+`make logs ARGS="-tail 500 -source container"`.
+
+## Testing
+
+`make test` runs the unit test suite (fakes/seams, no live pod or 1Password
+session needed). `make test-integration` is separate and opt-in only: it
+deploys a **real** pod, sends it a test chat request, and destroys it again —
+costs GPU billing and a few minutes, so it never runs in `make test` or CI.
 
 See `CLAUDE.md` for architecture details and things that are easy to get
 wrong when changing this setup.
