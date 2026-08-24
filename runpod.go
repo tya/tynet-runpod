@@ -114,7 +114,7 @@ type networkVolume struct {
 // new one in a data center with stock for gpuTypeID.
 func (c *runpodClient) ensureNetworkVolume(ctx context.Context, name string, sizeGB int, gpuTypeID string) (networkVolume, error) {
 	var list struct {
-		Volumes []networkVolume `json:"volumes"`
+		Volumes []networkVolume `json:"networkVolumes"`
 	}
 	if err := c.do(ctx, http.MethodGet, "/v2/network-volumes", nil, &list); err != nil {
 		return networkVolume{}, err
