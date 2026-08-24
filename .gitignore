@@ -1,3 +1,3 @@
-.env
-.runpod-pod.env
+.runpod-state.json
 *.log
+/tynet-runpod

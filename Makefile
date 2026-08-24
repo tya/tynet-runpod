@@ -1,10 +1,16 @@
-.PHONY: deploy run destroy
+.PHONY: deploy run destroy gpus resize
 
 deploy:
-	scripts/deploy-pod.sh
+	go run . deploy
 
 run:
-	scripts/claude-runpod.sh
+	go run . run $(ARGS)
 
 destroy:
-	scripts/destroy-pod.sh
+	go run . destroy
+
+gpus:
+	go run . gpus
+
+resize:
+	go run . resize
