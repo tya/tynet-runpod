@@ -12,9 +12,11 @@ no `runpodctl`, no local `.env` file, no shell scripts.
 ## Commands
 
 ```sh
-go build -o tynet-runpod .   # build
-go vet ./...                 # static analysis
-gofmt -l .                   # check formatting
+make build    # go build -o tynet-runpod .
+make test     # go test ./...
+make cover    # go test -coverprofile=... then open an HTML coverage view
+go vet ./...  # static analysis
+gofmt -l .    # check formatting
 
 make deploy   # go run . deploy  — create the pod, wait for it to boot
 make run      # go run . run     — exec `claude` against it
@@ -23,9 +25,12 @@ make gpus     # go run . gpus    — list GPUs with stock in network-volume-capa
 make resize   # go run . resize  — re-apply vllmArgs to a running pod and restart it
 ```
 
-There's no test suite — the `gpus`/`verify`-style checks against the real
-RunPod API during development are the only feedback loop; see git history
-for how those were done ad hoc.
+`main_test.go`/`runpod_test.go`/`secrets_test.go`/`state_test.go` cover
+95.8% of statements via fakes/seams (`runpodClientFactory`, `secretsLoader`,
+`healthChecker`, `execFunc`) — no live RunPod pod or 1Password session
+needed to run them. `.github/workflows/ci.yml` runs build/vet/gofmt/test on
+every push to main and every PR, and is a required status check before
+merging.
 
 ## Architecture
 
