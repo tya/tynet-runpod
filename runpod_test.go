@@ -37,10 +37,10 @@ func TestNewRunpodClient(t *testing.T) {
 	}
 }
 
-func TestRunpodClientFactory(t *testing.T) {
-	api := runpodClientFactory("k")
+func TestNewRunpodAPI(t *testing.T) {
+	api := newRunpodAPI("k")
 	if _, ok := api.(*runpodClient); !ok {
-		t.Errorf("runpodClientFactory returned %T, want *runpodClient", api)
+		t.Errorf("newRunpodAPI returned %T, want *runpodClient", api)
 	}
 }
 

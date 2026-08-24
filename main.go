@@ -134,7 +134,7 @@ func cmdDeploy(ctx context.Context) error {
 		podName = "tynet-runpod-vllm"
 	}
 
-	client := runpodClientFactory(secrets["RUNPOD_API_KEY"])
+	client := newRunpodAPI(secrets["RUNPOD_API_KEY"])
 
 	fmt.Println("Ensuring persistent Hugging Face cache volume...")
 	vol, err := client.ensureNetworkVolume(ctx, hfCacheVolume, hfCacheSize, secrets["GPU_TYPE_ID"])
@@ -246,7 +246,7 @@ func cmdDestroy(ctx context.Context) error {
 		return fmt.Errorf("RUNPOD_API_KEY is empty in the tynet-runpod Environment")
 	}
 
-	client := runpodClientFactory(secrets["RUNPOD_API_KEY"])
+	client := newRunpodAPI(secrets["RUNPOD_API_KEY"])
 	fmt.Printf("Terminating pod %s...\n", state.PodID)
 	if err := client.deletePod(ctx, state.PodID); err != nil {
 		return err
@@ -269,7 +269,7 @@ func cmdGPUs(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	client := runpodClientFactory(secrets["RUNPOD_API_KEY"])
+	client := newRunpodAPI(secrets["RUNPOD_API_KEY"])
 	dcs, err := client.listNetworkVolumeCapableGPUs(ctx)
 	if err != nil {
 		return err
@@ -300,7 +300,7 @@ func cmdResize(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	client := runpodClientFactory(secrets["RUNPOD_API_KEY"])
+	client := newRunpodAPI(secrets["RUNPOD_API_KEY"])
 	if err := client.patchPodArgs(ctx, state.PodID, vllmArgs(secrets)); err != nil {
 		return fmt.Errorf("patching pod args: %w", err)
 	}
@@ -325,7 +325,7 @@ func cmdStatus(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	client := runpodClientFactory(secrets["RUNPOD_API_KEY"])
+	client := newRunpodAPI(secrets["RUNPOD_API_KEY"])
 	p, err := client.getPod(ctx, state.PodID)
 	if err != nil {
 		return err
@@ -365,7 +365,7 @@ func cmdLogs(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	client := runpodClientFactory(secrets["RUNPOD_API_KEY"])
+	client := newRunpodAPI(secrets["RUNPOD_API_KEY"])
 
 	ctx, stop := notifyContext(ctx, os.Interrupt)
 	defer stop()
