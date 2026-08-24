@@ -1,10 +1,24 @@
-.PHONY: deploy run destroy
+.PHONY: help deploy run destroy gpus resize
 
-deploy:
-	scripts/deploy-pod.sh
+-include .env.local
+export
 
-run:
-	scripts/claude-runpod.sh
+.DEFAULT_GOAL := help
 
-destroy:
-	scripts/destroy-pod.sh
+help: ## List available targets
+	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "%-10s %s\n", $$1, $$2}'
+
+deploy: ## Create the GPU pod, wait for it to boot
+	go run . deploy
+
+run: ## Exec claude against the running pod (ARGS="..." to pass flags)
+	go run . run $(ARGS)
+
+destroy: ## Terminate the pod (keeps the cache volume)
+	go run . destroy
+
+gpus: ## List GPU stock in network-volume-capable data centers
+	go run . gpus
+
+resize: ## Re-apply vllm args to a running pod and restart it
+	go run . resize

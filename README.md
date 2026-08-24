@@ -8,41 +8,60 @@ instead of Anthropic's API.
 vLLM natively exposes an Anthropic-compatible `/v1/messages` endpoint
 alongside its usual OpenAI-compatible one. So the setup is just:
 
-1. A RunPod GPU pod runs `vllm serve <model>` with tool-calling enabled.
+1. A small Go CLI in this repo creates a RunPod GPU pod running
+   `vllm serve <model>` with tool-calling enabled, using RunPod's REST API
+   directly (no `runpodctl`).
 2. RunPod exposes the pod's port 8000 over HTTPS at
    `https://<pod-id>-8000.proxy.runpod.net`.
-3. The Claude Code CLI is pointed at that URL via `ANTHROPIC_BASE_URL` /
-   `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL`.
+3. The same CLI execs Claude Code, pointed at that URL via
+   `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_MODEL`.
 
 No translation proxy in between — vLLM speaks the protocol Claude Code
 expects directly.
 
 ## Secrets
 
-All secrets/config live in the **tynet-runpod** 1Password Environment,
-mounted locally as `.env` at the repo root (kept in sync by the 1Password
-app — don't edit it directly). See `.env.example` for the variable names if
-you're not using 1Password.
+All secrets/config live in the **tynet-runpod** 1Password Environment. This
+CLI reads it directly via the [1Password Go
+SDK](https://github.com/1password/onepassword-sdk-go) using desktop-app
+integration — the first run pops a Touch ID/password prompt in the
+1Password app to approve the integration; approve it once and subsequent
+runs go through without a prompt.
 
-Before first use, fill in via the 1Password app:
+Before first use:
+```sh
+cp .env.local.example .env.local   # gitignored; fill in your account/Environment IDs
+```
+`OP_ACCOUNT_ID`/`OP_ENVIRONMENT_ID` just identify *which* 1Password account
+and Environment to read — they're not secrets, but are kept out of source so
+a public clone of this repo doesn't reveal whose account it is. The Makefile
+sources `.env.local` automatically.
+
+Then fill in via the 1Password app (Developer → Environments →
+tynet-runpod):
 - `RUNPOD_API_KEY` — from the RunPod console (Settings → API Keys)
 - `HF_TOKEN` — a Hugging Face access token
   ([huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)).
   Only needed if you switch `MODEL_ID` to a *gated* model (one requiring you
   to accept a license on its Hugging Face page before downloading, e.g.
   Llama) — vLLM needs the token to authenticate the download. The default
-  `MODEL_ID` is public, so this can stay as the placeholder for now.
+  `MODEL_ID` is public, so this can stay as a placeholder for now.
 
 `VLLM_API_KEY` is already set to a generated random token; `MODEL_ID`,
 `GPU_TYPE_ID`, `POD_NAME`, and `TOOL_CALL_PARSER` have sensible defaults.
+Run `make gpus` to see which GPU types currently have stock in a data center
+that also supports the persistent cache volume, before changing
+`GPU_TYPE_ID`.
 
 ## Quick start
 
 ```sh
 make deploy    # create the GPU pod, wait for it to boot
 make run       # run Claude Code against it
-make destroy   # tear the pod down when done (billed hourly)
+make destroy   # tear the pod down when done (billed hourly; keeps the cache volume)
 ```
+
+`make run` passes through extra args to `claude`, e.g. `make run ARGS="-p 'hello'"`.
 
 See `CLAUDE.md` for architecture details and things that are easy to get
 wrong when changing this setup.
