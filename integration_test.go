@@ -13,21 +13,26 @@ import (
 	"time"
 )
 
-// TestIntegration_DeployRunDestroy stands up a real RunPod pod via cmdDeploy,
-// sends it a chat request over the same Anthropic-compatible endpoint
-// `claude` uses, and tears the pod down via cmdDestroy.
+// TestIntegration_DeployRunDestroy sends a chat request to a real RunPod pod
+// over the same Anthropic-compatible endpoint `claude` uses.
+//
+// cmdDeploy never checks for an existing pod before creating one — running
+// it while .runpod-state.json already tracks a pod would create a second,
+// unrelated pod and overwrite the state file with its ID, orphaning the
+// original (still billing, no longer referenced anywhere). So this test
+// checks state first: if a pod is already tracked, it's reused as-is —
+// no new pod is deployed, and cleanup does *not* destroy it, since the test
+// didn't create it and tearing down infrastructure it doesn't own would be
+// its own surprise. A fresh pod is only deployed (and destroyed on cleanup)
+// when .runpod-state.json is empty.
 //
 // This costs real GPU-hour billing and can take several minutes (weight
-// download + torch.compile on a cold cache). It never runs as part of
-// `go test ./...` or CI — only via `make test-integration`, which passes
-// -tags integration explicitly. It's skipped automatically if the
-// tynet-runpod 1Password Environment isn't reachable or is missing
-// required values, so it's safe to leave in the normal test tree.
-//
-// It runs cmdDeploy/cmdDestroy for real, so it reads and overwrites
-// .runpod-state.json in the repo root exactly like a manual `make deploy`
-// would — don't run this while a real pod's state you care about is
-// recorded there.
+// download + torch.compile on a cold cache) on the fresh-deploy path. It
+// never runs as part of `go test ./...` or CI — only via
+// `make test-integration`, which passes -tags integration explicitly. It's
+// skipped automatically if the tynet-runpod 1Password Environment isn't
+// reachable or is missing required values, so it's safe to leave in the
+// normal test tree.
 func TestIntegration_DeployRunDestroy(t *testing.T) {
 	ctx := context.Background()
 
@@ -41,21 +46,35 @@ func TestIntegration_DeployRunDestroy(t *testing.T) {
 		}
 	}
 
-	t.Cleanup(func() {
-		t.Log("Tearing down the integration-test pod...")
-		if err := cmdDestroy(context.Background()); err != nil {
-			t.Errorf("cleanup: cmdDestroy: %v", err)
-		}
-	})
-
-	t.Log("Deploying a real pod (this can take several minutes)...")
-	if err := cmdDeploy(ctx); err != nil {
-		t.Fatalf("cmdDeploy: %v", err)
-	}
-
 	state, err := loadState()
 	if err != nil {
 		t.Fatalf("loadState: %v", err)
+	}
+
+	if state.PodID != "" {
+		t.Logf("Pod %s is already tracked in .runpod-state.json — reusing it instead of deploying a new one.", state.PodID)
+	} else {
+		t.Cleanup(func() {
+			t.Log("Tearing down the integration-test pod...")
+			if err := cmdDestroy(context.Background()); err != nil {
+				t.Errorf("cleanup: cmdDestroy: %v", err)
+			}
+		})
+
+		t.Log("Deploying a real pod (this can take several minutes)...")
+		if err := cmdDeploy(ctx); err != nil {
+			t.Fatalf("cmdDeploy: %v", err)
+		}
+
+		state, err = loadState()
+		if err != nil {
+			t.Fatalf("loadState: %v", err)
+		}
+	}
+
+	t.Log("Waiting for the pod to be healthy...")
+	if err := waitHealthy(state.BaseURL, healthTimeout, healthInterval); err != nil {
+		t.Fatalf("waitHealthy: %v", err)
 	}
 
 	t.Log("Sending a test chat request...")
