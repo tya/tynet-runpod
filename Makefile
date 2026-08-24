@@ -1,4 +1,4 @@
-.PHONY: help build deploy run destroy gpus resize status logs test cover test-integration
+.PHONY: help build deploy run destroy gpus resize status logs test cover test-integration clean
 
 -include .env.local
 export
@@ -41,3 +41,6 @@ cover: ## Run tests and open an HTML coverage report in the browser
 
 test-integration: ## Deploy a REAL pod, verify it replies, then destroy it (costs GPU billing + several minutes)
 	go test -tags integration -run TestIntegration -v -timeout 20m ./...
+
+clean: ## Remove build/test artifacts (binary, coverage profile)
+	rm -f tynet-runpod /tmp/tynet-runpod-cover.out
