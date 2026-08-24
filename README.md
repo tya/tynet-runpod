@@ -49,11 +49,10 @@ tynet-runpod):
 
 `VLLM_API_KEY` is already set to a generated random token; `MODEL_ID`,
 `GPU_TYPE_ID`, `POD_NAME`, and `TOOL_CALL_PARSER` have sensible defaults.
-Run `make gpus` to see which GPU types currently have stock in a data center
-that also supports the persistent cache volume, before changing
-`GPU_TYPE_ID`.
 
 ## Quick start
+
+Run `make` (or `make help`) any time to list every available target.
 
 ```sh
 make deploy    # create the GPU pod, wait for it to boot
@@ -66,7 +65,20 @@ make destroy   # tear the pod down when done (billed hourly; keeps the cache vol
 `make run`/`make logs` pass through extra args, e.g. `make run ARGS="-p 'hello'"` or
 `make logs ARGS="-tail 500 -source container"`.
 
-## Testing
+Two more before you change `GPU_TYPE_ID` or a running pod's config:
+`make gpus` lists GPU stock in data centers that also support the persistent
+cache volume; `make resize` re-applies `vllm serve` args to an already-running
+pod and restarts it, without a full destroy/deploy cycle.
+
+## Development
+
+```sh
+make build             # build the tynet-runpod binary
+make test              # run the unit test suite
+make cover             # run tests, then open an HTML coverage report
+make test-integration  # deploy a REAL pod, verify it replies, then destroy it
+make clean             # remove build/test artifacts
+```
 
 `make test` runs the unit test suite (fakes/seams, no live pod or 1Password
 session needed). `make test-integration` is separate and opt-in only: it
