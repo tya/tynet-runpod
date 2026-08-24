@@ -87,6 +87,14 @@ in `vllmArgs`). The parser name is model-family-specific (see vLLM's
 [tool calling docs](https://docs.vllm.ai/en/stable/features/tool_calling/));
 `TOOL_CALL_PARSER` must match whatever `MODEL_ID` you're running.
 
+**`--enforce-eager` is on by default** (`enforceEager` in `main.go`) — it
+skips `torch.compile` and CUDA graph capture, which were the bulk of a cold
+deploy's ~5.3 minute startup (weight download is separate and already cached
+by the network volume). Trade: somewhat slower steady-state decode
+throughput, a good deal for an interactive single-session assistant. Set
+`VLLM_ENFORCE_EAGER=false` in the tynet-runpod Environment to disable it and
+get full compiled-graph throughput instead.
+
 ## Secrets: 1Password Environment, via the Go SDK
 
 All config/secrets live in the **tynet-runpod** 1Password Environment,
@@ -106,10 +114,12 @@ SDK's desktop-app integration is the mechanism that actually works from a
 program.
 
 Variables: `RUNPOD_API_KEY`, `HF_TOKEN`, `VLLM_API_KEY`, `MODEL_ID`,
-`GPU_TYPE_ID`, `POD_NAME`, `TOOL_CALL_PARSER`. `HF_TOKEN` is a Hugging Face
-access token, only required when `MODEL_ID` is switched to a *gated* model
-(one requiring license acceptance on its Hugging Face page, e.g. Llama) —
-vLLM needs it to authenticate the weight download.
+`GPU_TYPE_ID`, `POD_NAME`, `TOOL_CALL_PARSER`, `VLLM_ENFORCE_EAGER`.
+`HF_TOKEN` is a Hugging Face access token, only required when `MODEL_ID` is
+switched to a *gated* model (one requiring license acceptance on its
+Hugging Face page, e.g. Llama) — vLLM needs it to authenticate the weight
+download. `VLLM_ENFORCE_EAGER` defaults to on (see Architecture above);
+set it to `false` to disable.
 
 Requires CGO to build (`WithDesktopAppIntegration` needs it; see the SDK's
 README) — not an issue on a normal local `go build` on macOS, but relevant

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -91,10 +92,24 @@ func vllmArgs(secrets map[string]string) string {
 	if toolCallParser == "" {
 		toolCallParser = "qwen3_xml"
 	}
-	return fmt.Sprintf(
+	args := fmt.Sprintf(
 		"%s --host 0.0.0.0 --port %d --api-key %s --enable-auto-tool-choice --tool-call-parser %s --max-model-len %d",
 		secrets["MODEL_ID"], vllmPort, secrets["VLLM_API_KEY"], toolCallParser, maxModelLen,
 	)
+	if enforceEager(secrets) {
+		args += " --enforce-eager"
+	}
+	return args
+}
+
+// enforceEager reports whether vLLM should skip torch.compile and CUDA
+// graph capture for faster startup, at the cost of slower steady-state
+// decode throughput — a good trade for interactive single-session use.
+// Defaults to true; set VLLM_ENFORCE_EAGER=false in the tynet-runpod
+// Environment to disable it and get full compiled-graph throughput instead.
+func enforceEager(secrets map[string]string) bool {
+	v := strings.ToLower(strings.TrimSpace(secrets["VLLM_ENFORCE_EAGER"]))
+	return v != "false" && v != "0"
 }
 
 func cmdDeploy(ctx context.Context) error {
