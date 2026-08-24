@@ -135,6 +135,44 @@ func TestVllmArgs_UsesConfiguredToolCallParser(t *testing.T) {
 	}
 }
 
+func TestVllmArgs_EnforceEagerDefaultsOn(t *testing.T) {
+	got := vllmArgs(map[string]string{"MODEL_ID": "m", "VLLM_API_KEY": "k"})
+	if !strings.Contains(got, "--enforce-eager") {
+		t.Errorf("vllmArgs() = %q, want --enforce-eager by default", got)
+	}
+}
+
+func TestVllmArgs_EnforceEagerDisabled(t *testing.T) {
+	got := vllmArgs(map[string]string{"MODEL_ID": "m", "VLLM_API_KEY": "k", "VLLM_ENFORCE_EAGER": "false"})
+	if strings.Contains(got, "--enforce-eager") {
+		t.Errorf("vllmArgs() = %q, want no --enforce-eager when disabled", got)
+	}
+}
+
+func TestEnforceEager(t *testing.T) {
+	tests := []struct {
+		value string
+		want  bool
+	}{
+		{"", true},
+		{"true", true},
+		{"1", true},
+		{"anything-else", true},
+		{"false", false},
+		{"FALSE", false},
+		{"  false  ", false},
+		{"0", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.value, func(t *testing.T) {
+			got := enforceEager(map[string]string{"VLLM_ENFORCE_EAGER": tt.value})
+			if got != tt.want {
+				t.Errorf("enforceEager(%q) = %v, want %v", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFindClaude_Found(t *testing.T) {
 	dir := t.TempDir()
 	claudePath := filepath.Join(dir, "claude")
