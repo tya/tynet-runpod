@@ -51,13 +51,13 @@ func (f *fakeRunpodAPI) streamLogs(ctx context.Context, id string, tail int, sou
 	return f.streamLogsFn(ctx, id, tail, source, w)
 }
 
-// withFakeRunpodClient overrides runpodClientFactory to always return fake,
+// withFakeRunpodClient overrides newRunpodAPI to always return fake,
 // restoring the original on test cleanup.
 func withFakeRunpodClient(t *testing.T, fake *fakeRunpodAPI) {
 	t.Helper()
-	orig := runpodClientFactory
-	t.Cleanup(func() { runpodClientFactory = orig })
-	runpodClientFactory = func(apiKey string) runpodAPI { return fake }
+	orig := newRunpodAPI
+	t.Cleanup(func() { newRunpodAPI = orig })
+	newRunpodAPI = func(apiKey string) runpodAPI { return fake }
 }
 
 func withFakeSecrets(t *testing.T, secrets map[string]string, err error) {

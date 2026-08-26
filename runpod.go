@@ -47,8 +47,8 @@ func newRunpodClient(apiKey string) *runpodClient {
 	}
 }
 
-// runpodClientFactory is overridden in tests to return a fake runpodAPI.
-var runpodClientFactory = func(apiKey string) runpodAPI {
+// newRunpodAPI is overridden in tests to return a fake runpodAPI.
+var newRunpodAPI = func(apiKey string) runpodAPI {
 	return newRunpodClient(apiKey)
 }
 

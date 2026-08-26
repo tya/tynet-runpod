@@ -30,7 +30,7 @@ make test-integration  # deploy a REAL pod, send it a chat request, destroy it
 ```
 
 `main_test.go`/`runpod_test.go`/`secrets_test.go`/`state_test.go` cover
-95.8%+ of statements via fakes/seams (`runpodClientFactory`, `secretsLoader`,
+95.8%+ of statements via fakes/seams (`newRunpodAPI`, `secretsLoader`,
 `healthChecker`, `execFunc`) — no live RunPod pod or 1Password session
 needed to run them. `.github/workflows/ci.yml` runs build/vet/gofmt/test on
 every push to main and every PR, and is a required status check before
